@@ -22,20 +22,21 @@ SERS provides a human-triggered, real-time emergency reporting and coordination 
 🔄 Real-time coordination across staff dashboards
 🧠 AI-based classification of emergencies
 🔌 Offline-first functionality with background sync
-🚀 Key Features
-⚡ Emergency Handling
 
 **Key Screens**
-Dashboard – Real-time emergency monitoring and alerts
-SOS / Report – Instant emergency reporting interface
-History – Track past and resolved emergencies
-Staff Panel – Manage responses and update status
-Admin Controls – System overview and role management
+# Dashboard – Real-time emergency monitoring and alerts
+# SOS / Report – Instant emergency reporting interface
+# History – Track past and resolved emergencies
+# Staff Panel – Manage responses and update status
+# Admin Controls – System overview and role management
 
-One-Tap SOS Button for instant reporting
-AI Classification (type + severity using Gemini AI)
-Multi-Level Severity System (Level 1–3 Critical)
-Live Status Tracking (Active → Resolved)
+**Key Features**
+
+# Emergency Handling
+# One-Tap SOS Button for instant reporting
+# AI Classification (type + severity using Gemini AI)
+# Multi-Level Severity System (Level 1–3 Critical)
+#Live Status Tracking (Active → Resolved)
 
 **Real-Time Coordination**
 Instant alert broadcasting using Socket.IO
