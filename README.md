@@ -156,3 +156,11 @@ Mobile app support
 - [ ] Analytics and reporting dashboard
 - [ ] Multi-language support
 
+
+## Contributions
+- Forked initial frontend structure
+- Implemented backend (Node.js, Express)
+- Designed system workflow and role-based access
+- Integrated real-time communication using Socket.IO
+- Added AI-based classification (Gemini API)
+- Handled debugging and system integration
