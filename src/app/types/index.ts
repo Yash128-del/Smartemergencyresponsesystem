@@ -4,7 +4,7 @@ export type UserRole = 'guest' | 'staff' | 'admin';
 
 export type EmergencyLevel = 1 | 2 | 3;
 
-export type EmergencyStatus = 'pending' | 'in-progress' | 'resolved';
+export type EmergencyStatus = 'active'|'pending' | 'in-progress' | 'resolved';
 
 export type EmergencyType = 
   | 'medical'
@@ -99,6 +99,7 @@ export interface SystemConfig {
   adminPhone: string;
   adminName: string;
   createdAt: string;
+  zones?: string[];          // Zones/areas within this system
   aiSuggestedName?: string;
   primaryLocation?: string;
   staffCount?: number;
@@ -124,6 +125,7 @@ export interface SystemSettings {
   policeNumber: string;
   ambulanceNumber: string;
   fireNumber: string;
+  defaultStaffPassword?: string;
   customEmergencyNumbers: CustomEmergencyNumber[];
 }
 

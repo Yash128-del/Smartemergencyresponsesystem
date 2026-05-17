@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, SystemConfig, SystemSettings } from '../types';
 import { MOCK_USERS } from '../utils/mockData';
+import { createSystem as apiCreateSystem, enterSystem as apiEnterSystem, updateSystemSettings as apiUpdateSystemSettings, loginStaff, getAllStaff } from '../../services/api';
 
 const DEFAULT_SETTINGS: SystemSettings = {
   autoAssignStaff: true,
@@ -32,20 +33,25 @@ interface AuthContextType {
   logout: () => void;
   register: (email: string, password: string, name: string, role: 'guest' | 'staff', locationId: string) => Promise<boolean>;
   createSystem: (config: Omit<SystemConfig, 'id' | 'createdAt'>, adminPassword: string) => Promise<{ success: boolean; systemId?: string }>;
-  enterSystem: (identifier: string) => Promise<boolean>;
-  updateSystemSettings: (settings: Partial<SystemSettings>) => void;
+  enterSystem: (accessCode: string, email: string) => Promise<boolean>;
+  updateSystemSettings: (settings: Partial<SystemSettings>) => Promise<void>;
   isAuthenticated: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    const storedUser = localStorage.getItem('sers_current_user');
+    return storedUser ? JSON.parse(storedUser) : null;
+  });
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(() => {
+    const storedSystem = localStorage.getItem('sers_system_config');
+    return storedSystem ? JSON.parse(storedSystem) : null;
+  });
   const [users, setUsers] = useState<User[]>([]);
-  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
 
   useEffect(() => {
-    // Load users from localStorage or use mock data
     const storedUsers = localStorage.getItem('sers_users');
     if (storedUsers) {
       setUsers(JSON.parse(storedUsers));
@@ -53,23 +59,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUsers(MOCK_USERS);
       localStorage.setItem('sers_users', JSON.stringify(MOCK_USERS));
     }
-
-    // Check if user is logged in
-    const storedUser = localStorage.getItem('sers_current_user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-
-    // Load system config
-    const storedSystem = localStorage.getItem('sers_system_config');
-    if (storedSystem) {
-      setSystemConfig(JSON.parse(storedSystem));
-    }
   }, []);
 
+  // 🧠 BACKGROUND SYNC: Always keep the staff cache fresh for offline login
+  useEffect(() => {
+    if (systemConfig) {
+      getAllStaff()
+        .then(data => {
+          const staffList = Array.isArray(data) ? data : (data.staff || []);
+          if (staffList.length > 0) {
+            localStorage.setItem('sers_staff_cache', JSON.stringify(staffList));
+          }
+        })
+        .catch(err => console.warn('Background staff sync failed:', err));
+    }
+  }, [systemConfig]);
+
   const login = async (email: string, password: string): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, 600));
-    const allUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
+    try {
+      const result = await loginStaff(email, password);
+      
+      if (result.success) {
+        const userData = result.user;
+        const systemData = result.system;
+
+        setUser(userData);
+        setSystemConfig(systemData);
+
+        // Store everything needed for system isolation
+        localStorage.setItem('sers_current_user', JSON.stringify(userData));
+        if (systemData) {
+          localStorage.setItem('sers_system_id', systemData._id);
+          localStorage.setItem('sers_system_zones', JSON.stringify(systemData.zones || []));
+          localStorage.setItem('sers_system_config', JSON.stringify(systemData));
+        }
+
+        return true;
+      }
+    } catch (error) {
+      console.warn('Backend login failed, trying fallback:', error);
+    }
+
+    // Fallback for demo users and old systems not in MongoDB
+    const localUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
+    const cachedStaff: User[] = JSON.parse(localStorage.getItem('sers_staff_cache') || '[]');
+    const allUsers = [...localUsers, ...cachedStaff];
+
     const foundUser = allUsers.find(u => u.email === email);
     if (foundUser) {
       setUser(foundUser);
@@ -81,7 +116,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginByPhone = async (phone: string): Promise<boolean> => {
     await new Promise(resolve => setTimeout(resolve, 600));
-    const allUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
+    const localUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
+    const cachedStaff: User[] = JSON.parse(localStorage.getItem('sers_staff_cache') || '[]');
+    const allUsers = [...localUsers, ...cachedStaff];
+    
     const foundUser = allUsers.find(u => u.phone === phone);
     if (foundUser) {
       setUser(foundUser);
@@ -130,63 +168,164 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     config: Omit<SystemConfig, 'id' | 'createdAt'>,
     adminPassword: string
   ): Promise<{ success: boolean; systemId?: string }> => {
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    try {
+      // 1. Save to MongoDB via API
+      const result = await apiCreateSystem({
+        ...config,
+        settings: DEFAULT_SETTINGS
+      }, adminPassword); // Pass password as second argument as defined in api.js
 
-    const systemId = `SYS${Date.now()}`;
-    const newSystem: SystemConfig = {
-      ...config,
-      id: systemId,
-      createdAt: new Date().toISOString(),
-      settings: DEFAULT_SETTINGS,
-    };
+      if (!result.success) throw new Error('Failed to create system');
 
-    localStorage.setItem('sers_system_config', JSON.stringify(newSystem));
-    setSystemConfig(newSystem);
+      const systemData = result.system;
+      const systemId = result.systemId;
 
-    // Create admin user for this system
-    const adminUser: User = {
-      id: `USR${Date.now()}`,
-      email: config.adminEmail,
-      name: config.adminName,
-      role: 'admin',
-      locationId: systemId,
-      department: 'Administration',
-      availability: 'available',
-      phone: config.adminPhone,
-      authorizationLevel: 'admin',
-    };
+      // 2. Store system info in localStorage
+      localStorage.setItem('sers_system_id', systemId);
+      localStorage.setItem('sers_system_config', JSON.stringify(systemData));
+      localStorage.setItem('sers_system_zones', JSON.stringify(systemData.zones || []));
+      
+      setSystemConfig(systemData);
 
-    const allUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
-    const updatedUsers = [...allUsers, adminUser];
-    localStorage.setItem('sers_users', JSON.stringify(updatedUsers));
-    setUsers(updatedUsers);
+      // 3. Create the local admin user object (matches the one created in backend)
+      const adminUser: User = {
+        id: `USR_ADMIN_${systemId}`,
+        email: config.adminEmail,
+        name: config.adminName,
+        role: 'admin',
+        locationId: systemId,
+        department: 'Administration',
+        availability: 'available',
+        phone: config.adminPhone,
+        authorizationLevel: 'admin',
+      };
 
-    setUser(adminUser);
-    localStorage.setItem('sers_current_user', JSON.stringify(adminUser));
+      const allUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
+      const updatedUsers = [...allUsers, adminUser];
+      localStorage.setItem('sers_users', JSON.stringify(updatedUsers));
+      setUsers(updatedUsers);
 
-    return { success: true, systemId };
-  };
+      setUser(adminUser);
+      localStorage.setItem('sers_current_user', JSON.stringify(adminUser));
 
-  const enterSystem = async (identifier: string): Promise<boolean> => {
-    await new Promise(resolve => setTimeout(resolve, 600));
-    const allUsers: User[] = JSON.parse(localStorage.getItem('sers_users') || JSON.stringify(MOCK_USERS));
-    const foundUser = allUsers.find(u => u.email === identifier || u.phone === identifier);
-    if (foundUser) {
-      setUser(foundUser);
-      localStorage.setItem('sers_current_user', JSON.stringify(foundUser));
-      return true;
+      // 🧹 Wipe any old local data so the new dashboard is clean
+      localStorage.removeItem('sers_emergencies');
+      localStorage.removeItem('sers_staff_cache');
+      window.dispatchEvent(new Event('sers_system_changed'));
+
+      return { success: true, systemId };
+    } catch (error) {
+      console.error('System creation error:', error);
+      return { success: false };
     }
-    return false;
   };
 
-  const updateSystemSettings = (settings: Partial<SystemSettings>) => {
+  const enterSystem = async (accessCode: string, email: string): Promise<boolean> => {
+    try {
+      const result = await apiEnterSystem(accessCode, email);
+      
+      if (result.success) {
+        const userData = result.user;
+        const systemData = result.system;
+
+        setUser(userData);
+        setSystemConfig(systemData);
+
+        localStorage.setItem('sers_current_user', JSON.stringify(userData));
+        localStorage.setItem('sers_system_id', systemData._id);
+        localStorage.setItem('sers_system_zones', JSON.stringify(systemData.zones || []));
+        localStorage.setItem('sers_system_config', JSON.stringify(systemData));
+
+        // 🧹 Wipe old data when entering a different system to prevent cache contamination
+        localStorage.removeItem('sers_emergencies');
+        localStorage.removeItem('sers_staff_cache');
+        localStorage.removeItem('sers_users');
+        window.dispatchEvent(new Event('sers_system_changed'));
+
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.warn('Backend entry failed, trying offline fallback:', error);
+      
+      // OFFLINE FALLBACK: Check if this user has successfully entered this system before
+      const cachedSystem = JSON.parse(localStorage.getItem('sers_system_config') || 'null');
+      const cachedUser = JSON.parse(localStorage.getItem('sers_current_user') || 'null');
+      const staffCache = JSON.parse(localStorage.getItem('sers_staff_cache') || '[]');
+      const savedSystemId = localStorage.getItem('sers_system_id');
+
+      console.log('--- Offline Auth Debug ---');
+      console.log('Input Access Code:', accessCode);
+      console.log('Cached System Code:', cachedSystem?.accessCode);
+      console.log('Cached System ID:', cachedSystem?._id || cachedSystem?.id);
+      console.log('Stored System ID:', savedSystemId);
+
+      const systemMatches = cachedSystem && (
+        cachedSystem.accessCode?.toUpperCase() === accessCode?.toUpperCase() || 
+        cachedSystem._id === accessCode ||
+        cachedSystem.id === accessCode ||
+        savedSystemId === accessCode
+      );
+
+      if (systemMatches) {
+        console.log('System ID/Code matched! Checking user...');
+        
+        // System code matches, now check user email
+        // 1. Check if it's the last logged in user
+        if (cachedUser && cachedUser.email?.toLowerCase() === email?.toLowerCase()) {
+          console.log('Matched last logged in user!');
+          setUser(cachedUser);
+          setSystemConfig(cachedSystem);
+          return true;
+        }
+        
+        // 2. Check if it's ANY staff in the cached list
+        const foundInCache = staffCache.find((s: any) => s.email?.toLowerCase() === email?.toLowerCase());
+        if (foundInCache) {
+          console.log('Matched user from staff cache!');
+          setUser(foundInCache);
+          setSystemConfig(cachedSystem);
+          return true;
+        }
+
+        // 3. Guest fallback: If code matches, let any new email in as guest (offline)
+        console.log('No staff match, entering as guest.');
+        const guestUser: User = {
+          id: `USR_GUEST_${Date.now()}`,
+          email,
+          name: email.split('@')[0],
+          role: 'guest',
+          locationId: cachedSystem._id || cachedSystem.id || savedSystemId,
+        };
+        setUser(guestUser);
+        setSystemConfig(cachedSystem);
+        return true;
+      }
+      
+      console.error('Offline entry failed: Access code does not match any local system cache.');
+      return false;
+    }
+  };
+
+  const updateSystemSettings = async (settings: Partial<SystemSettings>) => {
     if (!systemConfig) return;
-    const updated: SystemConfig = {
-      ...systemConfig,
-      settings: { ...(systemConfig.settings || DEFAULT_SETTINGS), ...settings },
-    };
-    setSystemConfig(updated);
-    localStorage.setItem('sers_system_config', JSON.stringify(updated));
+    try {
+      const updated: SystemConfig = {
+        ...systemConfig,
+        settings: { ...(systemConfig.settings || DEFAULT_SETTINGS), ...settings },
+      };
+      
+      // Save to Backend
+      const result = await apiUpdateSystemSettings(systemConfig._id, updated.settings);
+      
+      if (result.success) {
+        setSystemConfig(updated);
+        localStorage.setItem('sers_system_config', JSON.stringify(updated));
+      }
+    } catch (error) {
+      console.error('Failed to sync settings:', error);
+      toast.error('Settings saved locally but failed to sync to cloud');
+    }
   };
 
   return (
